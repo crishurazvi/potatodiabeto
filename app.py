@@ -2,235 +2,368 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# CONFIG & STYLING
+# 0. CONFIGURARE & STILIZARE
 # ==========================================
 st.set_page_config(
-    page_title="Diabetes Clinical Decision Support",
-    page_icon="🩺",
+    page_title="Precision Diabetes Architect",
+    page_icon="🧬",
     layout="wide"
 )
 
-# Stiluri CSS pentru a evidenția recomandările
+# CSS Avansat pentru a diferenția acțiunile
 st.markdown("""
     <style>
-    .safety-box { border-left: 5px solid #d9534f; background-color: #fdf7f7; padding: 15px; border-radius: 5px; }
-    .mandate-box { border-left: 5px solid #f0ad4e; background-color: #fcf8e3; padding: 15px; border-radius: 5px; }
-    .action-box { border-left: 5px solid #5cb85c; background-color: #f0f9eb; padding: 15px; border-radius: 5px; }
-    .deescalate-box { border-left: 5px solid #5bc0de; background-color: #f0f8ff; padding: 15px; border-radius: 5px; }
+    .action-stop { border-left: 6px solid #d9534f; background-color: #fff5f5; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+    .action-start { border-left: 6px solid #28a745; background-color: #f0fff4; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+    .action-switch { border-left: 6px solid #007bff; background-color: #eef7ff; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+    .citation { font-size: 0.85em; color: #666; font-style: italic; margin-top: 5px; }
+    .metric-box { text-align: center; padding: 10px; background: #f8f9fa; border-radius: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
-DISCLAIMER = "⚠️ **INSTRUMENT SUPORT CLINIC**: Recomandările sunt bazate pe ghiduri (ADA/EASD). Decizia finală și verificarea interacțiunilor medicamentoase aparțin medicului curant."
+DISCLAIMER = "⚠️ **CLINICAL DECISION SUPPORT**: Acest algoritm aplică strict ghidurile ADA/EASD 2024. Nu înlocuiește judecata clinică. Verificați toleranța individuală."
 
 # ==========================================
-# SIDEBAR - DATE PACIENT
+# 1. CLASE DE DEFINIȚIE (BAZA DE CUNOȘTINȚE)
 # ==========================================
-st.sidebar.header("1. Profil Pacient")
+# Aici definim "inteligența" despre medicamente
+DRUG_CLASSES = {
+    "Metformin": {"type": "Oral", "contra_egfr": 30, "warning_egfr": 45},
+    "SGLT2i": {"type": "Oral", "contra_egfr": 20, "benefit": ["HF", "CKD", "ASCVD"]},
+    "GLP1_RA": {"type": "Injectable", "contra_egfr": 0, "benefit": ["ASCVD", "Weight", "CKD_Secondary"]}, # eGFR limits vary by agent, safe generally
+    "DPP4i": {"type": "Oral", "contra_egfr": 0, "conflict": "GLP1_RA"},
+    "SU": {"type": "Oral", "contra_egfr": 60, "risk": "Hypo"}, # Gliclazide safe lower, but general rule
+    "TZD": {"type": "Oral", "contra": "HF"},
+    "Insulin_Basal": {"type": "Injectable", "risk": "Hypo"},
+    "Insulin_Prandial": {"type": "Injectable", "risk": "Hypo"}
+}
 
-# Biometrie
+# ==========================================
+# 2. UI - INPUT DATE (SIDEBAR)
+# ==========================================
+st.sidebar.title("🧬 Clinical Input")
+
+st.sidebar.subheader("Profil Biologic")
 c1, c2 = st.sidebar.columns(2)
-weight = c1.number_input("Greutate (kg)", 40, 200, 90)
+weight = c1.number_input("Greutate (kg)", 40, 250, 95)
 height = c2.number_input("Înălțime (cm)", 100, 240, 175)
 bmi = weight / ((height/100)**2)
-st.sidebar.caption(f"BMI Calculat: {bmi:.1f} kg/m²")
 
-# Laborator
-st.sidebar.header("2. Date Laborator")
-hba1c = st.sidebar.number_input("HbA1c Actual (%)", 4.0, 18.0, 8.5, step=0.1)
+st.sidebar.subheader("Laborator")
+hba1c = st.sidebar.number_input("HbA1c (%)", 4.0, 18.0, 8.2, step=0.1)
 target_a1c = st.sidebar.selectbox("Țintă HbA1c", [6.5, 7.0, 7.5, 8.0], index=1)
-egfr = st.sidebar.number_input("eGFR (mL/min)", 5, 140, 60)
-uacr_high = st.sidebar.checkbox("Albuminurie (uACR > 30 mg/g)")
+egfr = st.sidebar.number_input("eGFR (mL/min)", 5, 140, 45)
+acr = st.sidebar.selectbox("Albuminurie (uACR)", ["A1 Normal (<30)", "A2 Micro (30-300)", "A3 Macro (>300)"])
 
-# Comorbidități (Foarte important pentru algoritm)
-st.sidebar.header("3. Comorbidități (FDRCV)")
-ascvd = st.sidebar.checkbox("ASCVD (Infarct, AVC, Arteriopatie)")
-hf = st.sidebar.checkbox("Insuficiență Cardiacă (HF)")
-ckd = st.sidebar.checkbox("Boală Cronică de Rinichi (CKD)")
+st.sidebar.subheader("Fenotip & Comorbidități")
+ascvd = st.sidebar.checkbox("ASCVD (Infarct, AVC, PAD)")
+hf = st.sidebar.checkbox("Insuficiență Cardiacă (HFrEF/pEF)")
+ckd_dx = st.sidebar.checkbox("Diagnostic CKD (Rinichi)")
+if acr != "A1 Normal (<30)": ckd_dx = True # Logic override
 
-# Tratament Actual
-st.sidebar.header("4. Tratament Actual")
-st.sidebar.caption("Selectează clasele pe care pacientul le ia DEJA:")
-
-med_metformin = st.sidebar.checkbox("Metformin")
-med_sglt2 = st.sidebar.checkbox("SGLT2i (Dapa/Empa/Cana)")
-med_glp1 = st.sidebar.checkbox("GLP-1 RA (Sema/Dula/Lira)")
-med_dpp4 = st.sidebar.checkbox("DPP-4i (Sita/Lina/Vilda)")
-med_su = st.sidebar.checkbox("Sulfoniluree (Gliclazid/Glimepirid)")
-med_insulin_basal = st.sidebar.checkbox("Insulină Bazală")
-med_insulin_prandial = st.sidebar.checkbox("Insulină Prandială")
-
-# Status doze
-st.sidebar.markdown("---")
-max_tolerated = st.sidebar.checkbox("Tratamentul actual e la doze maxime tolerate?")
+st.sidebar.subheader("Schema Actuală")
+# Folosim o listă simplă pentru procesare
+current_meds = []
+if st.sidebar.checkbox("Metformin"): current_meds.append("Metformin")
+if st.sidebar.checkbox("SGLT2i (Dapa/Empa/Cana)"): current_meds.append("SGLT2i")
+if st.sidebar.checkbox("GLP-1 RA (Sema/Dula/Lira)"): current_meds.append("GLP1_RA")
+if st.sidebar.checkbox("DPP-4i (Sita/Lina/Vilda)"): current_meds.append("DPP4i")
+if st.sidebar.checkbox("Sulfoniluree (SU)"): current_meds.append("SU")
+if st.sidebar.checkbox("TZD (Pioglitazona)"): current_meds.append("TZD")
+if st.sidebar.checkbox("Insulină Bazală"): current_meds.append("Insulin_Basal")
+if st.sidebar.checkbox("Insulină Prandială"): current_meds.append("Insulin_Prandial")
 
 # ==========================================
-# LOGIC ENGINE (MOTORUL DE DECIZIE)
+# 3. MOTORUL DE DECIZIE (ALGORITM SECVENȚIAL)
 # ==========================================
-
-def run_logic_engine():
-    safety_alerts = []
-    organ_mandates = []
-    glycemic_actions = []
-    deescalation_tips = []
-
-    # ----------------------------------------
-    # 1. SAFETY & CONTRAINDICATIONS
-    # ----------------------------------------
-    if egfr < 30 and med_metformin:
-        safety_alerts.append("⛔ **STOP Metformin**: eGFR < 30 este contraindicație absolută.")
-    elif egfr < 45 and med_metformin and not max_tolerated:
-        safety_alerts.append("⚠️ **Ajustare Metformin**: eGFR 30-45. Reduceți doza la 500-1000mg/zi.")
-
-    if egfr < 20 and med_sglt2:
-        safety_alerts.append("⛔ **STOP/Reevaluare SGLT2i**: eGFR < 20 (date limitate, risc eficacitate scăzută).")
-
-    if med_glp1 and med_dpp4:
-        safety_alerts.append("⛔ **Duplicitate Mecanism**: STOP DPP-4i. Nu se asociază cu GLP-1 RA (cost inutil, fără beneficiu).")
-
-    if med_insulin_prandial and med_su:
-        safety_alerts.append("⚠️ **Risc Hipoglicemie**: Luați în considerare oprirea Sulfonilureei la inițierea insulinei prandiale.")
-
-    # ----------------------------------------
-    # 2. ORGAN PROTECTION (Independent de A1c)
-    # ----------------------------------------
-    # Regula: Dacă are ASCVD/HF/CKD, trebuie SGLT2i sau GLP1 INDIFERENT de glicemie.
+def generate_plan(meds, hba1c, target, egfr, bmi, ascvd, hf, ckd):
+    plan = [] 
+    # Planul este o listă de dicționare: {action_type: 'STOP'|'START'|'SWITCH', text: str, reason: str, ref: str}
     
-    organ_gap = False # Flag dacă lipsește protecția de organ
-
-    if hf:
-        if not med_sglt2:
-            organ_mandates.append("🫀 **Adaugă SGLT2i**: Obligatoriu pentru Insuficiență Cardiacă (Clasa I, Nivel A).")
-            organ_gap = True
+    # Copie locală a medicamentelor pentru simulare
+    simulated_meds = meds.copy()
     
-    if ckd or (uacr_high and egfr >= 20):
-        if not med_sglt2:
-            organ_mandates.append("kidney **Adaugă SGLT2i**: Preferat pentru protecție renală și reducerea progresiei CKD.")
-            organ_gap = True
-        elif not med_glp1 and med_sglt2:
-            organ_mandates.append("ℹ️ **Consideră GLP-1 RA**: Dacă eGFR scade în continuare sau ACR mare, adăugați GLP-1 pentru protecție suplimentară.")
+    # -----------------------------------------------------
+    # PASUL 1: SANITIZARE & SIGURANȚĂ (Hard Stops)
+    # -----------------------------------------------------
+    
+    # 1.1 Verificare eGFR Metformin
+    if "Metformin" in simulated_meds:
+        if egfr < 30:
+            plan.append({
+                "type": "STOP",
+                "text": "OPRIȚI Metformin",
+                "reason": "Contraindicație absolută: eGFR < 30 mL/min (Risc Acidoză Lactică).",
+                "ref": "ADA Standards 2024 Sec. 9"
+            })
+            simulated_meds.remove("Metformin")
+        elif egfr < 45:
+            plan.append({
+                "type": "ALERT", # Nu stop, dar avertisment
+                "text": "Reduceți doza Metformin (Max 1000mg)",
+                "reason": "eGFR 30-45 necesită ajustare doză.",
+                "ref": "FDA Labeling"
+            })
 
+    # 1.2 Verificare eGFR SGLT2i
+    if "SGLT2i" in simulated_meds and egfr < 20:
+        plan.append({
+            "type": "STOP",
+            "text": "OPRIȚI SGLT2i",
+            "reason": "eGFR < 20: eficacitate glicemică nulă și date de siguranță limitate pentru inițiere.",
+            "ref": "EMPA-KIDNEY / DAPA-CKD exclusion criteria"
+        })
+        simulated_meds.remove("SGLT2i")
+
+    # 1.3 Verificare TZD în HF
+    if "TZD" in simulated_meds and hf:
+        plan.append({
+            "type": "STOP",
+            "text": "OPRIȚI Pioglitazona (TZD)",
+            "reason": "Contraindicație majoră: Retenție hidrosalină agravează Insuficiența Cardiacă.",
+            "ref": "AHA/ADA Guidelines"
+        })
+        simulated_meds.remove("TZD")
+        
+    # 1.4 Conflict DPP-4i + GLP-1 RA (Cazul menționat de tine!)
+    # Verificăm dacă pacientul a venit DEJA cu ambele (eroare de prescripție anterioară)
+    if "DPP4i" in simulated_meds and "GLP1_RA" in simulated_meds:
+        plan.append({
+            "type": "STOP",
+            "text": "OPRIȚI DPP-4i imediat",
+            "reason": "Duplicitate terapeutică cu GLP-1 RA. Nu există beneficiu adăugat, doar costuri.",
+            "ref": "ADA Standards - Pharmacology"
+        })
+        simulated_meds.remove("DPP4i")
+
+    # -----------------------------------------------------
+    # PASUL 2: PROTECȚIE DE ORGAN (Indicație obligatorie)
+    # -----------------------------------------------------
+    # Aici adăugăm medicamentele care TREBUIE să existe, indiferent de A1c.
+    
+    # 2.1 Insuficiență Cardiacă (HF) -> SGLT2i este MANDATORY
+    if hf and "SGLT2i" not in simulated_meds and egfr >= 20:
+        plan.append({
+            "type": "START",
+            "text": "INIȚIAȚI SGLT2i (Dapagliflozin/Empagliflozin)",
+            "reason": "Indicație Clasa A pentru HFrEF și HFpEF indiferent de diabet.",
+            "ref": "DAPA-HF, DELIVER, EMPEROR-Reduced/Preserved"
+        })
+        simulated_meds.append("SGLT2i") # Simulăm adăugarea pentru a nu dubla la pasul 3
+    
+    # 2.2 CKD -> SGLT2i (Primary)
+    if ckd_dx and "SGLT2i" not in simulated_meds and egfr >= 20:
+        plan.append({
+            "type": "START",
+            "text": "INIȚIAȚI SGLT2i",
+            "reason": "Încetinirea progresiei bolii renale cronice.",
+            "ref": "DAPA-CKD, EMPA-KIDNEY"
+        })
+        simulated_meds.append("SGLT2i")
+
+    # 2.3 ASCVD -> GLP-1 RA (Preferat) sau SGLT2i
     if ascvd:
-        if not med_glp1 and not med_sglt2:
-            organ_mandates.append("🫀 **Adaugă GLP-1 RA sau SGLT2i**: Beneficiu CV dovedit. GLP-1 RA preferat dacă predomină ateroscleroza.")
-            organ_gap = True
-        elif med_sglt2 and not med_glp1 and hba1c > target_a1c:
-            organ_mandates.append("➕ **Adaugă GLP-1 RA**: Pentru beneficiu CV cumulativ și control glicemic.")
+        has_protection = ("SGLT2i" in simulated_meds) or ("GLP1_RA" in simulated_meds)
+        if not has_protection:
+            # Alegem între ele. Dacă BMI e mare -> GLP1.
+            if bmi > 27:
+                plan.append({
+                    "type": "START",
+                    "text": "INIȚIAȚI GLP-1 RA (cu beneficiu CV dovedit)",
+                    "reason": "ASCVD prezent + Obezitate. GLP-1 (Sema/Lira/Dula) reduce MACE (Mortalitate CV, AVC, IM).",
+                    "ref": "SUSTAIN-6, PIONEER-6, REWIND, LEADER"
+                })
+                simulated_meds.append("GLP1_RA")
+                
+                # Aici intervine "Switch-ul" inteligent: Dacă inițiem GLP1, trebuie să verificăm dacă are DPP4
+                if "DPP4i" in simulated_meds:
+                    plan.append({
+                        "type": "STOP",
+                        "text": "OPRIȚI DPP-4i (concomitent cu inițierea GLP-1)",
+                        "reason": "Mecanisme redundante. GLP-1 înlocuiește DPP-4i.",
+                        "ref": "Ghid practic farmacologie"
+                    })
+                    simulated_meds.remove("DPP4i")
+            else:
+                # Dacă nu e obez, poate SGLT2 e ok
+                plan.append({
+                    "type": "START",
+                    "text": "INIȚIAȚI SGLT2i sau GLP-1 RA",
+                    "reason": "ASCVD necesită acoperire. Alegeți în funcție de cost/toleranță.",
+                    "ref": "ADA Standards Sec 9"
+                })
+                simulated_meds.append("SGLT2i")
 
-    # ----------------------------------------
-    # 3. GLYCEMIC CONTROL (Escaladare)
-    # ----------------------------------------
-    a1c_gap = hba1c - target_a1c
+    # -----------------------------------------------------
+    # PASUL 3: INTENSIFICARE GLICEMICĂ (Glycemic Gap)
+    # -----------------------------------------------------
+    gap = hba1c - target
     
-    # Doar dacă siguranța o permite
-    if a1c_gap > 0:
-        glycemic_actions.append(f"📈 **Necesită Intensificare**: HbA1c {hba1c}% vs Țintă {target_a1c}%.")
+    if gap > 0:
+        # Avem nevoie de scădere suplimentară
         
-        # Pasul 1: Metformin (Fundație)
-        if not med_metformin and egfr >= 30:
-            glycemic_actions.append("🔹 **Inițiază Metformin**: Prima linie de tratament (dacă nu e contraindicat).")
+        # 3.1 Nu are Metformin?
+        if "Metformin" not in simulated_meds and egfr >= 30:
+            plan.append({
+                "type": "START",
+                "text": "ADĂUGAȚI Metformin",
+                "reason": "Baza tratamentului (eficacitate mare, cost mic, fără hipo).",
+                "ref": "UKPDS"
+            })
+            simulated_meds.append("Metformin")
+            
+        # 3.2 Are Metformin, dar nu e la țintă. Are DPP-4i și vrem putere mai mare?
+        # AICI REZOLVĂM CONTRADICȚIA: "Upgrade" de la DPP4 la GLP1
+        elif "DPP4i" in simulated_meds and "GLP1_RA" not in simulated_meds:
+            plan.append({
+                "type": "SWITCH",
+                "text": "ÎNLOCUIȚI DPP-4i cu GLP-1 RA",
+                "reason": "GLP-1 RA are eficacitate mult superioară (high efficacy) față de DPP-4i (intermediate).",
+                "ref": "Studii head-to-head (ex. SUSTAIN)"
+            })
+            simulated_meds.remove("DPP4i")
+            simulated_meds.append("GLP1_RA")
+            
+        # 3.3 Nu are nici SGLT2, nici GLP1 (și nu are indicație de organ, e doar glicemie)
+        elif "SGLT2i" not in simulated_meds and "GLP1_RA" not in simulated_meds:
+            if bmi > 25:
+                 plan.append({
+                    "type": "START",
+                    "text": "ADĂUGAȚI GLP-1 RA (sau Dual GIP/GLP-1)",
+                    "reason": "Preferat pentru eficacitate glicemică mare și control ponderal.",
+                    "ref": "SURPASS / SUSTAIN"
+                })
+            else:
+                 plan.append({
+                    "type": "START",
+                    "text": "ADĂUGAȚI SGLT2i",
+                    "reason": "Opțiune orală sigură, fără risc hipoglicemie.",
+                    "ref": ""
+                })
         
-        # Pasul 2: Dacă Metformin există (sau e contraindicat), ce urmează?
-        else:
-            # Dacă lipsește o clasă de organ protection, a fost deja sugerată mai sus.
-            # Aici tratăm cazul în care organele sunt protejate sau nu au probleme, dar glicemia e mare.
-            
-            # Alegerea agentului potent
-            if not med_glp1 and not med_insulin_basal:
-                if bmi > 27:
-                    glycemic_actions.append("🔹 **Adaugă GLP-1 RA**: Eficacitate mare + Scădere ponderală.")
-                elif not med_sglt2:
-                    glycemic_actions.append("🔹 **Adaugă SGLT2i sau GLP-1 RA**: Agenți cu risc mic de hipoglicemie.")
-            
-            # Pasul 3: Dacă are deja GLP-1 sau SGLT2 și tot e mare
-            elif med_glp1 and not med_insulin_basal:
-                if not med_sglt2 and egfr > 20:
-                    glycemic_actions.append("🔹 **Asociere Triplă**: Adaugă SGLT2i la Metformin + GLP-1.")
-                else:
-                    glycemic_actions.append("💉 **Inițiere Insulină Bazală**: GLP-1 maximizat. Începeți cu 10 U/zi sau 0.1-0.2 U/kg.")
+        # 3.4 Are deja GLP1 + Metformin + SGLT2 și tot nu e controlat? -> Insulina
+        elif "GLP1_RA" in simulated_meds and "Metformin" in simulated_meds and gap > 0.5:
+             if "Insulin_Basal" not in simulated_meds:
+                 plan.append({
+                    "type": "START",
+                    "text": "INIȚIAȚI Insulină Bazală",
+                    "reason": "Terapia injectabilă combinată este necesară. GLP-1 RA maximizat.",
+                    "ref": "ADA Standards - Intensification"
+                })
+                 if "SU" in simulated_meds:
+                     plan.append({
+                        "type": "STOP",
+                        "text": "CONSIDERAȚI OPRIREA Sulfonilureei",
+                        "reason": "Risc crescut de hipoglicemie la adăugarea insulinei.",
+                        "ref": ""
+                    })
 
-            # Pasul 4: Are Insulina Bazală
-            elif med_insulin_basal:
-                if med_glp1:
-                    glycemic_actions.append("⚖️ **Titrare Insulină**: Verificați glicemia a jeun. Dacă e normală dar A1c mare -> adăugați Insulina Prandială.")
-                else:
-                    glycemic_actions.append("➕ **Adaugă GLP-1 RA**: Înainte de a trece la regim Bolus-Bazal complet (injectabil combinat).")
+    # -----------------------------------------------------
+    # PASUL 4: DE-ESCALADARE (Over-treatment)
+    # -----------------------------------------------------
+    if hba1c < 6.5:
+        if "SU" in simulated_meds:
+            plan.append({
+                "type": "STOP",
+                "text": "DE-ESCALADARE: Opriți/Reduceți Sulfonilureea",
+                "reason": "HbA1c < 6.5% indică risc de hipoglicemie. SU are beneficiu limitat cardiovascular.",
+                "ref": "Deprescribing guidelines"
+            })
+        if "Insulin_Basal" in simulated_meds and hba1c < 6.0:
+             plan.append({
+                "type": "ALERT",
+                "text": "DE-ESCALADARE: Reduceți Insulina Bazală cu 20%",
+                "reason": "Control foarte strict, risc major de hipoglicemie.",
+                "ref": ""
+            })
 
-    # ----------------------------------------
-    # 4. DE-ESCALATION (Glicemie prea mică sau regim complex inutil)
-    # ----------------------------------------
-    if hba1c < 6.5 and (med_su or med_insulin_basal or med_insulin_prandial):
-        deescalation_tips.append("📉 **Consideră De-escaladarea**: HbA1c este strâns (<6.5%).")
-        if med_su:
-            deescalation_tips.append("🔻 **STOP/Reduce Sulfoniluree**: Risc de hipoglicemie. Agenții moderni (SGLT2/GLP1) sunt preferați.")
-        if med_insulin_basal and hba1c < 6.0:
-            deescalation_tips.append("🔻 **Titrare în jos Insulină**: Reduceți doza cu 10-20% pentru a evita hipoglicemia.")
-
-    return safety_alerts, organ_mandates, glycemic_actions, deescalation_tips
+    return plan
 
 # ==========================================
-# UI & DISPLAY
+# 4. AFIȘARE REZULTATE
 # ==========================================
-
-st.title("Ghid Ajustare Tratament Diabet (ADA/EASD)")
-st.markdown(f"> {DISCLAIMER}")
-
-# Dashboard rapid
-col1, col2, col3, col4 = st.columns(4)
-diff = hba1c - target_a1c
-col1.metric("HbA1c Gap", f"{diff:+.1f}%", delta_color="inverse")
-col2.metric("eGFR Status", f"{egfr} mL/min", delta_color="normal" if egfr > 60 else "inverse")
-risk_label = "Foarte Înalt" if (ascvd or hf or ckd) else "Standard"
-col3.metric("Risc Cardio-Renal", risk_label)
-col4.metric("BMI", f"{bmi:.1f}")
+plan_actions = generate_plan(current_meds, hba1c, target_a1c, egfr, bmi, ascvd, hf, ckd_dx)
 
 st.divider()
 
-# Rulare Algoritm
-safety, organ, glycemic, deescalation = run_logic_engine()
+# TABURI PENTRU CLARITATE
+tab1, tab2 = st.tabs(["📋 PLAN DE ACȚIUNE", "📚 Tutorial & Logică"])
 
-# Layout pe coloane
-left_col, right_col = st.columns([1, 1])
+with tab1:
+    col_main, col_detail = st.columns([1.5, 1])
+    
+    with col_main:
+        st.subheader("Plan Terapeutic Secvențial")
+        
+        if not plan_actions and hba1c <= target_a1c:
+            st.success("✅ Pacientul este echilibrat și tratat conform ghidurilor. Continuați monitorizarea.")
+        elif not plan_actions and hba1c > target_a1c:
+            st.warning("⚠️ Caz complex. Opțiunile standard sunt epuizate. Necesită consult diabetologic avansat (ex. pompe insulină).")
 
-with left_col:
-    st.subheader("1. Siguranță & Conflicte")
-    if safety:
-        for s in safety:
-            st.markdown(f"<div class='safety-box'>{s}</div><br>", unsafe_allow_html=True)
-    else:
-        st.success("✅ Fără contraindicații majore pe datele introduse.")
-
-    st.subheader("2. Protecție de Organ (Obligatoriu)")
-    if organ:
-        st.info("Pacientul are comorbidități (HF, CKD sau ASCVD) care necesită clase specifice INDIFERENT de HbA1c.")
-        for o in organ:
-            st.markdown(f"<div class='mandate-box'>{o}</div><br>", unsafe_allow_html=True)
-    elif (ascvd or hf or ckd):
-        st.success("✅ Terapia actuală acoperă protecția de organ necesară.")
-    else:
-        st.write("Nu există indicații specifice de organ (HF/CKD/ASCVD). Focus pe control glicemic.")
-
-with right_col:
-    st.subheader("3. Control Glicemic (HbA1c)")
-    if hba1c <= target_a1c:
-        st.success(f"✅ Pacientul este în țintă (HbA1c {hba1c}% <= {target_a1c}%).")
-        if deescalation:
-            st.subheader("4. Oportunități De-escaladare")
-            for d in deescalation:
-                st.markdown(f"<div class='deescalate-box'>{d}</div><br>", unsafe_allow_html=True)
-    else:
-        # Afișare acțiuni escaladare
-        for g in glycemic:
-            st.markdown(f"<div class='action-box'>{g}</div><br>", unsafe_allow_html=True)
+        # Randare Acțiuni
+        for item in plan_actions:
+            icon = ""
+            css_class = ""
+            if item['type'] == 'STOP':
+                icon = "⛔"
+                css_class = "action-stop"
+            elif item['type'] == 'START':
+                icon = "✅"
+                css_class = "action-start"
+            elif item['type'] == 'SWITCH':
+                icon = "🔄"
+                css_class = "action-switch"
+            else:
+                icon = "⚠️"
+                css_class = "action-switch" # Fallback
             
-    # Tabel mic de referință
-    with st.expander("Referință Rapidă Inițiere"):
-        ref_data = {
-            "Clasa": ["Metformin", "SGLT2i", "GLP-1 RA", "Insulină Bazală"],
-            "Doza Start": ["500mg la masă", "10mg (Dapa/Empa)", "0.25mg (Sema) / 0.75mg (Dula)", "10 U sau 0.1-0.2 U/kg"],
-            "Titrare": ["Crește săpt. la 2000mg", "Nu necesită titrare", "Crește la 4 săpt.", "Ajustare la 3 zile după glicemia a jeun"]
-        }
-        st.table(pd.DataFrame(ref_data))
+            st.markdown(f"""
+            <div class="{css_class}">
+                <strong>{icon} {item['type']}: {item['text']}</strong><br>
+                <span style="font-size:0.95em">{item['reason']}</span><br>
+                <div class="citation">Ref: {item['ref']}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-# Secțiunea Finală
-st.divider()
-st.caption("Algoritm bazat pe Consensus Report ADA/EASD 2024. Această aplicație nu stochează date.")
+    with col_detail:
+        st.subheader("Sumar Clinic")
+        st.markdown(f"**Glicemie**: {hba1c}% (Țintă {target_a1c}%)")
+        st.markdown(f"**eGFR**: {egfr} ml/min")
+        st.markdown("**Status Organ:**")
+        if hf: st.badge("Insuficiență Cardiacă")
+        if ckd_dx: st.badge("Boală Renală (CKD)")
+        if ascvd: st.badge("ASCVD (Vascular)")
+        if not (hf or ckd_dx or ascvd): st.write("Fără risc înalt specificat.")
+        
+        st.markdown("---")
+        st.write("Acest plan prioritizează:")
+        st.write("1. Eliminarea medicamentelor periculoase.")
+        st.write("2. Protecția de organ obligatorie.")
+        st.write("3. Intensificarea glicemică inteligentă (Switch > Add).")
+
+with tab2:
+    st.markdown("""
+    ### Cum Gândește Algoritmul (Tutorial)
+    
+    Acest sistem urmărește cercul de decizie ADA/EASD "Holistic person-centered approach":
+    
+    #### Pasul 1: Siguranța Înainte de Toate
+    Înainte de a adăuga ceva, verificăm dacă ce ia pacientul îl omoară.
+    *   *Exemplu:* Dacă eGFR < 30, Metforminul dispare din lista virtuală de medicamente *înainte* de a calcula următorul pas.
+    *   *Exemplu:* Dacă pacientul are DPP-4i și algoritmul vrea să dea GLP-1, va genera o comandă de **SWITCH (Înlocuire)**, nu de ADĂUGARE, pentru a evita redundanța.
+    
+    #### Pasul 2: "Organ Protection" (Coloana din Stânga a Ghidului)
+    Dacă pacientul are Insuficiență Cardiacă sau Boală Renală, SGLT2i este **obligatoriu** (Category 1A Evidence), indiferent dacă HbA1c este 6.5% sau 9%.
+    *   Algoritmul forțează această indicație.
+    
+    #### Pasul 3: Intensificarea Glicemică (Coloana din Dreapta a Ghidului)
+    Dacă organele sunt protejate, dar zahărul e mare:
+    *   Folosim agenți cu "High Efficacy" (GLP-1, Dual Agonists, Insulină).
+    *   Sistemul preferă GLP-1 în fața Insulinei bazale (mai puțină îngrășare, fără hipoglicemie).
+    
+    ### Studii de Referință
+    *   **DAPA-HF / EMPEROR-Reduced**: SGLT2i în HF.
+    *   **DAPA-CKD / EMPA-KIDNEY**: SGLT2i în CKD.
+    *   **SUSTAIN-6 / REWIND**: GLP-1 RA în ASCVD.
+    *   **VERIFY**: Beneficiul combinației precoce.
+    """)
