@@ -1,360 +1,226 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import datetime
-import uuid
 
 # ==========================================
-# CONFIGURATION & CONSTANTS
+# CONFIG & STYLING
 # ==========================================
 st.set_page_config(
-    page_title="Clinician Diabetes Support System",
+    page_title="Diabetes Treatment Decision Support",
     page_icon="🩺",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-SAFETY_LABEL = "⚠️ Clinical suggestion for review. NOT a prescription."
-GUIDELINE_VERSION = "Based on Mock ADA/EASD Consensus Logic (v2025.1)"
+# Custom CSS to highlight crucial alerts
+st.markdown("""
+    <style>
+    .warning-box { border-left: 5px solid #ffa500; background-color: #f9f9f9; padding: 10px; }
+    .rec-box { border-left: 5px solid #28a745; background-color: #f0fff4; padding: 10px; }
+    .contra-box { border-left: 5px solid #dc3545; background-color: #fff0f0; padding: 10px; }
+    </style>
+""", unsafe_allow_html=True)
 
-# Generic Dosing Reference (Static Data)
-DOSING_REF = pd.DataFrame([
-    {"Class": "Metformin", "Start": "500mg daily with meal", "Max": "2000-2550mg daily", "Note": "Titrate to mitigate GI SE"},
-    {"Class": "SGLT2i", "Start": "10mg (Empa/Dapa) or 100mg (Cana)", "Max": "Standard dose usually max", "Note": "Monitor genital hygiene, DKA risk"},
-    {"Class": "GLP-1 RA", "Start": "0.25mg (Semaglutide) / 0.75mg (Dulaglutide)", "Max": "2.0mg / 4.5mg", "Note": "Titrate q4 weeks"},
-    {"Class": "DPP-4i", "Start": "100mg (Sitagliptin)", "Max": "100mg", "Note": "Adjust for renal function"},
-    {"Class": "Basal Insulin", "Start": "10 units or 0.1-0.2 U/kg", "Max": "Titrate to FBG target", "Note": "Monitor Hypoglycemia"},
-])
-
-# ==========================================
-# DATA MODELS & MOCK DB
-# ==========================================
-def init_db():
-    if 'patients' not in st.session_state:
-        # Mock Data Generation
-        st.session_state.patients = [
-            {
-                "id": str(uuid.uuid4()),
-                "initials": "JD",
-                "dob": datetime.date(1965, 5, 20),
-                "sex": "Male",
-                "weight_kg": 95,
-                "height_cm": 175,
-                "type": "T2DM",
-                "duration_years": 8,
-                "hba1c": 8.2,
-                "egfr": 45, # CKD Stage 3b
-                "acr_cat": "A2",
-                "ascvd": True,
-                "hf": False,
-                "ckd": True,
-                "liver_disease": False,
-                "meds": ["Metformin 1000mg BID", "Lisinopril 10mg"],
-                "allergies": ["Sulfa"],
-                "glucose_history": [
-                    {"date": "2024-01-01", "val": 140, "type": "Fasting"},
-                    {"date": "2024-02-01", "val": 155, "type": "Fasting"},
-                    {"date": "2024-03-01", "val": 148, "type": "Fasting"},
-                ],
-                "hba1c_history": [
-                    {"date": "2023-01", "val": 7.5},
-                    {"date": "2023-06", "val": 7.8},
-                    {"date": "2024-01", "val": 8.2},
-                ]
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "initials": "AS",
-                "dob": datetime.date(1980, 8, 15),
-                "sex": "Female",
-                "weight_kg": 60,
-                "height_cm": 165,
-                "type": "T1DM",
-                "duration_years": 20,
-                "hba1c": 7.1,
-                "egfr": 90,
-                "acr_cat": "A1",
-                "ascvd": False,
-                "hf": False,
-                "ckd": False,
-                "liver_disease": False,
-                "meds": ["Insulin Glargine", "Insulin Aspart"],
-                "allergies": [],
-                "glucose_history": [],
-                "hba1c_history": [{"date": "2024-01", "val": 7.1}]
-            }
-        ]
-
-def calculate_bmi(weight, height):
-    if height > 0:
-        return round(weight / ((height/100)**2), 1)
-    return 0
+DISCLAIMER = "⚠️ **CLINICAL SUPPORT TOOL ONLY**: This is not a prescription. Suggestions are based on general guidelines (ADA/EASD). Verify all drug-drug interactions and specific patient history manually."
 
 # ==========================================
-# CLINICAL DECISION SUPPORT ENGINE
+# INPUT SIDEBAR (PATIENT DATA)
 # ==========================================
-def evaluate_guidelines(patient):
-    """
-    Pure logic function. Returns analysis dictionaries.
-    DOES NOT prescribe. Returns flags: Preferred, Neutral, Caution, Contraindicated.
-    """
-    analysis = []
+st.sidebar.header("1. Patient Profile")
+
+# Biometrics
+weight = st.sidebar.number_input("Weight (kg)", 40, 200, 90)
+height = st.sidebar.number_input("Height (cm)", 100, 240, 175)
+bmi = weight / ((height/100)**2)
+st.sidebar.caption(f"Calculated BMI: {bmi:.1f} kg/m²")
+
+# Labs
+st.sidebar.header("2. Laboratory Data")
+hba1c = st.sidebar.number_input("Current HbA1c (%)", 4.0, 18.0, 8.2, step=0.1)
+target_a1c = st.sidebar.selectbox("Target HbA1c", [6.5, 7.0, 7.5, 8.0], index=1)
+egfr = st.sidebar.number_input("eGFR (mL/min/1.73m²)", 5, 140, 55)
+uacr_high = st.sidebar.checkbox("Albuminuria (uACR > 30 mg/g)")
+
+# CV / Renal Risk Profile (Crucial for Guidelines)
+st.sidebar.header("3. Comorbidities (FDRCV)")
+ascvd = st.sidebar.checkbox("Established ASCVD (MI, Stroke, PAD)")
+hf = st.sidebar.checkbox("Heart Failure (HF)")
+ckd = st.sidebar.checkbox("CKD History")
+
+# Current Treatment
+st.sidebar.header("4. Current Meds")
+med_options = [
+    "Metformin", 
+    "SGLT2 Inhibitor (e.g., Dapa, Empa)", 
+    "GLP-1 RA (e.g., Sema, Dula, Lira)", 
+    "DPP-4 Inhibitor (e.g., Sita, Lina)", 
+    "Sulfonylurea (e.g., Gliclazide, Glimepiride)", 
+    "TZD (Pioglitazone)", 
+    "Basal Insulin", 
+    "Prandial Insulin"
+]
+current_meds = st.sidebar.multiselect("Select active medications:", med_options)
+
+# ==========================================
+# LOGIC ENGINE
+# ==========================================
+
+def get_recommendations():
+    recs = []
+    alerts = []
     
-    # Extract vars
-    egfr = patient['egfr']
-    ascvd = patient['ascvd']
-    hf = patient['hf']
-    ckd = patient['ckd']
-    p_type = patient['type']
-    bmi = calculate_bmi(patient['weight_kg'], patient['height_cm'])
+    # --- 1. SAFETY & CONTRAINDICATION CHECKS ---
+    if egfr < 30:
+        if "Metformin" in current_meds:
+            alerts.append(f"🔴 **STOP Metformin**: eGFR is {egfr} (Contraindicated < 30).")
+        if "SGLT2 Inhibitor (e.g., Dapa, Empa)" in current_meds:
+            alerts.append(f"🔴 **Review SGLT2i**: eGFR {egfr} is low. (Usually initiation contraindicated < 20-30, check specific agent).")
+            
+    if egfr < 45 and "Metformin" in current_meds:
+        alerts.append(f"🟠 **Dose Reduce Metformin**: eGFR 30-45. Max dose usually 1000mg/day.")
 
-    # 1. Metformin Logic
-    met_status = "Consider"
-    met_reason = "First-line for T2DM unless contraindicated."
-    if p_type == "T1DM":
-        met_status = "Not Indicated"
-        met_reason = "T1DM primary treatment is Insulin."
-    elif egfr < 30:
-        met_status = "Contraindicated"
-        met_reason = "eGFR < 30 mL/min/1.73m²."
-    elif egfr < 45:
-        met_status = "Caution"
-        met_reason = "Max dose 1000mg if eGFR 30-45."
+    if hf and "TZD (Pioglitazone)" in current_meds:
+        alerts.append("🔴 **STOP TZD**: Contraindicated in Heart Failure.")
+
+    # --- 2. ORGAN PROTECTION (Independent of HbA1c) ---
+    # Guidelines say: If ASCVD/HF/CKD, use SGLT2i or GLP1 REGARDLESS of A1c.
     
-    analysis.append({"Class": "Metformin", "Status": met_status, "Reason": met_reason})
+    organ_protection_needed = False
+    
+    if ascvd:
+        if "GLP-1 RA (e.g., Sema, Dula, Lira)" not in current_meds:
+            recs.append("✅ **Add GLP-1 RA**: Proven CV benefit in ASCVD (Guideline Class 1A).")
+            organ_protection_needed = True
+        if "SGLT2 Inhibitor (e.g., Dapa, Empa)" not in current_meds:
+            recs.append("✅ **Add SGLT2i**: Proven CV benefit (Guideline Class 1A).")
+            organ_protection_needed = True
+            
+    if hf:
+        if "SGLT2 Inhibitor (e.g., Dapa, Empa)" not in current_meds:
+            recs.append("✅ **Add SGLT2i**: Strongest evidence for Heart Failure (HFrEF & HFpEF).")
+            organ_protection_needed = True
+            
+    if ckd or (uacr_high and egfr >= 20):
+        if "SGLT2 Inhibitor (e.g., Dapa, Empa)" not in current_meds:
+            recs.append("✅ **Add SGLT2i**: Indicated for CKD progression delay (check eGFR thresholds).")
+            organ_protection_needed = True
+        if "GLP-1 RA (e.g., Sema, Dula, Lira)" not in current_meds and "SGLT2 Inhibitor (e.g., Dapa, Empa)" in current_meds:
+            recs.append("🔹 **Consider GLP-1 RA**: If SGLT2i not tolerated or further protection needed.")
 
-    # 2. SGLT2i Logic
-    sglt2_status = "Neutral"
-    sglt2_reason = "Option for glucose lowering."
-    if p_type == "T1DM":
-        sglt2_status = "Off-label/Caution"
-        sglt2_reason = "High DKA risk in T1DM."
+    # --- 3. GLYCEMIC INTENSIFICATION (If A1c > Target) ---
+    glycemic_gap = hba1c - target_a1c
+    
+    if glycemic_gap > 0:
+        if not organ_protection_needed:
+            recs.append(f"📉 **Intensification Needed**: HbA1c is {hba1c}% (Target {target_a1c}%).")
+        
+        # Scenario: No Meds yet
+        if not current_meds:
+            recs.append("🔹 **Start Metformin**: First line (unless contraindicated).")
+            
+        # Scenario: On Metformin, need next step (and no ASCVD/HF forced choice)
+        elif "Metformin" in current_meds and len(current_meds) == 1 and not (ascvd or hf or ckd):
+            if bmi > 27:
+                recs.append("🔹 **Add GLP-1 RA or SGLT2i**: Preferred for weight loss benefit.")
+            else:
+                recs.append("🔹 **Add SGLT2i, GLP-1, or DPP-4i**: Base choice on cost/side effects.")
+        
+        # Scenario: Very high A1c
+        if glycemic_gap > 1.5 or hba1c > 10:
+            if "Basal Insulin" not in current_meds and "GLP-1 RA (e.g., Sema, Dula, Lira)" in current_meds:
+                recs.append("💉 **Consider Basal Insulin**: High glycemic burden. Start 10U or 0.1-0.2 U/kg.")
+            elif "Basal Insulin" not in current_meds and "GLP-1 RA (e.g., Sema, Dula, Lira)" not in current_meds:
+                recs.append("💉 **Consider GLP-1 RA (High Potency)**: Before insulin if possible.")
+                
+        # Scenario: Already on Basal Insulin but not controlled
+        if "Basal Insulin" in current_meds:
+             recs.append("⚖️ **Overbasalization Check**: If Basal > 0.5 U/kg and A1c high, add Prandial Insulin or switch to GLP-1/Insulin combo.")
+
+    # --- 4. DE-ESCALATION / CONFLICTS ---
+    if "GLP-1 RA (e.g., Sema, Dula, Lira)" in current_meds and "DPP-4 Inhibitor (e.g., Sita, Lina)" in current_meds:
+        alerts.append("🟠 **Duplicate Mechanism**: STOP DPP-4i if starting GLP-1 RA (no added benefit, increased cost).")
+        
+    if "Basal Insulin" in current_meds and "Sulfonylurea (e.g., Gliclazide, Glimepiride)" in current_meds:
+        alerts.append("🟠 **Hypo Risk**: Consider stopping Sulfonylurea when starting Insulin to reduce hypoglycemia risk.")
+
+    return alerts, recs
+
+# ==========================================
+# MAIN UI
+# ==========================================
+
+st.title("Guideline-Based Clinical Support")
+st.markdown(f"> {DISCLAIMER}")
+
+# Dashboard Top Row
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("HbA1c Gap", f"{hba1c - target_a1c:.1f}%", delta_color="inverse" if hba1c > target_a1c else "normal")
+c2.metric("eGFR", f"{egfr}", delta_color="inverse" if egfr < 60 else "normal")
+c3.metric("BMI", f"{bmi:.1f}")
+c4.metric("CV Risk Status", "High" if (ascvd or hf or ckd) else "Standard")
+
+st.divider()
+
+alerts, recs = get_recommendations()
+
+# LAYOUT: Two columns (Alerts/Safety vs Recommendations)
+col_left, col_right = st.columns([1, 1.2])
+
+with col_left:
+    st.subheader("⚠️ Safety & Contraindications")
+    if alerts:
+        for alert in alerts:
+            st.markdown(f"<div class='contra-box'>{alert}</div><br>", unsafe_allow_html=True)
     else:
-        if hf or ckd:
-            sglt2_status = "Preferred"
-            sglt2_reason = "Compelling indication for HF/CKD benefit."
-        if egfr < 20: # General cutoff for initiation varies, safe threshold used
-            sglt2_status = "Contraindicated (Initiation)"
-            sglt2_reason = "eGFR too low for initiation (check specific agent)."
+        st.success("No major medication contraindications detected based on inputs.")
+
+    st.markdown("### Clinical Context")
+    st.write(f"**Patient**: {int(weight)}kg, {int(height)}cm")
+    st.write(f"**Target**: HbA1c < {target_a1c}%")
+    st.write("**Comorbidities**:")
+    if ascvd: st.badge("ASCVD")
+    if hf: st.badge("Heart Failure")
+    if ckd: st.badge("CKD")
+    if not (ascvd or hf or ckd): st.write("No major Cardiorenal flags selected.")
+
+with col_right:
+    st.subheader("📋 Guideline Suggestions (ADA/EASD)")
     
-    analysis.append({"Class": "SGLT2 Inhibitors", "Status": sglt2_status, "Reason": sglt2_reason})
-
-    # 3. GLP-1 RA Logic
-    glp1_status = "Neutral"
-    glp1_reason = "Potent glucose lowering."
-    if p_type == "T1DM":
-        glp1_status = "Off-label"
-        glp1_reason = "Not FDA approved for T1DM."
-    else:
-        if ascvd:
-            glp1_status = "Preferred"
-            glp1_reason = "Proven CV benefit in ASCVD."
-        elif bmi > 30:
-            glp1_status = "Preferred"
-            glp1_reason = "Benefit for weight management."
+    if hba1c <= target_a1c and not (ascvd or hf or ckd):
+        st.info("Patient is at target. Maintain current therapy and monitor every 3-6 months.")
     
-    analysis.append({"Class": "GLP-1 RA", "Status": glp1_status, "Reason": glp1_reason})
-
-    # 4. Sulfonylureas
-    su_status = "Neutral"
-    su_reason = "Effective, low cost."
-    if p_type == "T1DM":
-        su_status = "Not Indicated"
-        su_reason = "T1DM requires insulin."
-    else:
-        if egfr < 60 and "Glipizide" not in str(patient['meds']): 
-             su_status = "Caution"
-             su_reason = "Hypoglycemia risk increases with reduced renal function (prefer Glipizide)."
-        if hf or ckd or ascvd:
-            su_status = "Less Preferred"
-            su_reason = "Lack of CV/Renal outcome benefits compared to SGLT2i/GLP1."
-
-    analysis.append({"Class": "Sulfonylureas", "Status": su_status, "Reason": su_reason})
-
-    return pd.DataFrame(analysis)
-
-# ==========================================
-# UI COMPONENTS
-# ==========================================
-
-def render_patient_profile(patient):
-    # Header
-    col1, col2, col3, col4 = st.columns(4)
-    bmi = calculate_bmi(patient['weight_kg'], patient['height_cm'])
+    if recs:
+        st.markdown("Based on **Organ Protection** needs and **Glycemic Gap**:")
+        for rec in recs:
+             st.markdown(f"<div class='rec-box'>{rec}</div><br>", unsafe_allow_html=True)
     
-    with col1:
-        st.metric("Age", (datetime.date.today() - patient['dob']).days // 365)
-        st.metric("Type", patient['type'])
-    with col2:
-        st.metric("BMI", bmi)
-        st.metric("HbA1c", f"{patient['hba1c']}%")
-    with col3:
-        st.metric("eGFR", f"{patient['egfr']}")
-        if patient['egfr'] < 60:
-            st.error("CKD Suggested")
-    with col4:
-        # Badges
-        if patient['ascvd']: st.warning("ASCVD")
-        if patient['hf']: st.warning("Heart Failure")
-        if patient['ckd']: st.warning("CKD")
-        if patient['liver_disease']: st.info("Liver Disease")
-
-    st.markdown("---")
+    # Reference Table (Dynamic based on missing classes)
+    st.markdown("#### Quick Ref: Missing Agents")
+    dosing_data = []
+    if "SGLT2 Inhibitor (e.g., Dapa, Empa)" not in current_meds:
+        dosing_data.append({"Class": "SGLT2i", "Start": "Dapa 10mg / Empa 10mg", "Renal": "See eGFR limits"})
+    if "GLP-1 RA (e.g., Sema, Dula, Lira)" not in current_meds:
+        dosing_data.append({"Class": "GLP-1 RA", "Start": "Sema 0.25mg / Dula 0.75mg", "Renal": "Safe in CKD"})
     
-    # Charts
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("HbA1c Trend")
-        if patient['hba1c_history']:
-            df_a1c = pd.DataFrame(patient['hba1c_history'])
-            fig_a1c = px.line(df_a1c, x='date', y='val', markers=True, title="HbA1c (%)")
-            st.plotly_chart(fig_a1c, use_container_width=True)
-        else:
-            st.info("No historical A1c data.")
-            
-    with c2:
-        st.subheader("Glucose Entries")
-        if patient['glucose_history']:
-            df_gluc = pd.DataFrame(patient['glucose_history'])
-            fig_gluc = px.scatter(df_gluc, x='date', y='val', color='type', title="Glucose (mg/dL)")
-            fig_gluc.add_hline(y=70, line_dash="dot", line_color="red", annotation_text="Hypo Threshold")
-            st.plotly_chart(fig_gluc, use_container_width=True)
-        else:
-            st.info("No glucose logs available.")
+    if dosing_data:
+        st.table(pd.DataFrame(dosing_data))
 
-    # Current Meds
-    st.subheader("Current Medication Regime")
-    if patient['meds']:
-        for med in patient['meds']:
-            st.text(f"• {med}")
-    else:
-        st.text("No active medications recorded.")
+st.divider()
 
-def render_cds_module(patient):
-    st.markdown("## 🧠 Guideline-Informed Decision Support")
-    st.info(f"Ruleset: {GUIDELINE_VERSION}")
-    
-    # Disclaimer Box
-    st.warning(f"**IMPORTANT**: {SAFETY_LABEL}\n\nThis tool checks specific contraindications (e.g., eGFR limits) and guideline preferences (e.g., ASCVD). It does not account for temporary acute conditions, drug-drug interactions outside diabetes meds, or formulary coverage.")
+# Footer / Confirmation
+with st.expander("Clinician Action & Export"):
+    st.write("Review the suggestions above against the patient's full history (allergies, cost, preference).")
+    notes = st.text_area(" Consultation Notes")
+    if st.button("Confirm Review & Generate Summary"):
+        st.success("Review Recorded.")
+        st.markdown("**Summary to Copy/Paste:**")
+        st.code(f"""
+Subject: Diabetes Review
+Current A1c: {hba1c}% (Target {target_a1c}%)
+eGFR: {egfr}
+Comorbidities: {'ASCVD ' if ascvd else ''}{'HF ' if hf else ''}{'CKD ' if ckd else ''}
+Current Meds: {', '.join(current_meds)}
 
-    # Run Logic
-    df_analysis = evaluate_guidelines(patient)
-    
-    # Styling the DataFrame
-    def color_status(val):
-        color = 'black'
-        if val == 'Preferred': color = 'green'
-        elif val == 'Contraindicated': color = 'red'
-        elif val == 'Caution': color = 'orange'
-        return f'color: {color}; font-weight: bold'
+Plan/Considerations:
+{chr(10).join(['- ' + r.replace('✅','').replace('🔹','').replace('**','') for r in recs])}
 
-    st.subheader("Therapeutic Class Eligibility Review")
-    st.caption("Review these flags against patient history.")
-    
-    st.dataframe(
-        df_analysis.style.map(color_status, subset=['Status']),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    col_a, col_b = st.columns([1, 1])
-    
-    with col_a:
-        st.subheader("Reference: Standard Starting Doses")
-        st.caption("Not patient specific.")
-        st.table(DOSING_REF)
-
-    with col_b:
-        st.subheader("Clinical Actions")
-        st.markdown(f"**Active Patient**: {patient['initials']} (ID: {patient['id'][:8]})")
-        
-        notes = st.text_area("Clinical Notes / Rationale for Change", height=150)
-        
-        confirm_check = st.checkbox("I have reviewed the contraindications and verified eGFR/Allergies manually.")
-        
-        if st.button("Export Plan to PDF (Mock)", disabled=not confirm_check):
-            st.success("Plan generated (Mock download).")
-            st.balloons()
-            st.markdown(f"> **Plan Summary for {patient['initials']}**\n> Notes: {notes}\n> *{SAFETY_LABEL}*")
-
-# ==========================================
-# MAIN APP LAYOUT
-# ==========================================
-def main():
-    init_db()
-    
-    st.sidebar.title("CDSS Diabetes")
-    
-    menu = st.sidebar.radio("Navigation", ["Registry", "Add Patient"])
-    
-    if menu == "Registry":
-        st.title("Patient Registry")
-        
-        # Patient Selector
-        patient_names = {p['initials'] + f" ({p['id'][:4]})": p['id'] for p in st.session_state.patients}
-        selected_label = st.selectbox("Select Patient", list(patient_names.keys()))
-        selected_id = patient_names[selected_label]
-        
-        # Get Patient Object
-        patient = next(p for p in st.session_state.patients if p['id'] == selected_id)
-        
-        # Tabs for Patient View
-        tab1, tab2 = st.tabs(["Patient Profile", "Decision Support"])
-        
-        with tab1:
-            render_patient_profile(patient)
-            
-        with tab2:
-            render_cds_module(patient)
-
-    elif menu == "Add Patient":
-        st.title("Add New Patient")
-        with st.form("new_patient_form"):
-            c1, c2 = st.columns(2)
-            initials = c1.text_input("Initials")
-            dob = c2.date_input("Date of Birth", value=datetime.date(1970, 1, 1))
-            sex = c1.selectbox("Sex", ["Male", "Female"])
-            p_type = c2.selectbox("Diabetes Type", ["T1DM", "T2DM", "LADA", "Other"])
-            
-            st.markdown("---")
-            w = st.number_input("Weight (kg)", 40, 200, 80)
-            h = st.number_input("Height (cm)", 100, 250, 170)
-            egfr = st.number_input("eGFR (mL/min)", 0, 150, 90)
-            a1c = st.number_input("HbA1c (%)", 4.0, 20.0, 7.0)
-            
-            st.markdown("### Comorbidities")
-            col_a, col_b, col_c = st.columns(3)
-            ascvd = col_a.checkbox("ASCVD (MI, Stroke, PAD)")
-            hf = col_b.checkbox("Heart Failure")
-            ckd = col_c.checkbox("CKD (Albuminuria/History)")
-            
-            submit = st.form_submit_button("Create Record")
-            
-            if submit:
-                new_p = {
-                    "id": str(uuid.uuid4()),
-                    "initials": initials,
-                    "dob": dob,
-                    "sex": sex,
-                    "weight_kg": w,
-                    "height_cm": h,
-                    "type": p_type,
-                    "duration_years": 0,
-                    "hba1c": a1c,
-                    "egfr": egfr,
-                    "acr_cat": "Unknown",
-                    "ascvd": ascvd,
-                    "hf": hf,
-                    "ckd": ckd,
-                    "liver_disease": False,
-                    "meds": [],
-                    "allergies": [],
-                    "glucose_history": [],
-                    "hba1c_history": [{"date": str(datetime.date.today()), "val": a1c}]
-                }
-                st.session_state.patients.append(new_p)
-                st.success("Patient Added!")
-                st.rerun()
-
-if __name__ == "__main__":
-    main()
+Notes: {notes}
+        """)
