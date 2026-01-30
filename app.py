@@ -1,21 +1,3 @@
-Aceasta este o idee excelentă. Tabelul din imagine este o "mină de aur" de informații farmacologice care completează perfect algoritmul decizional.
-
-Pentru a integra informațiile din imagine într-un mod interactiv și ușor de citit, cea mai bună abordare în Streamlit este să transformăm aplicația într-o structură cu Tab-uri (File).
-
-Vom avea două tab-uri principale:
-
-🧬 Algoritm Decizional (Codul existent)
-
-💊 Compendiu Farmacologic (Noua secțiune bazată pe imagine)
-
-Iată codul complet, actualizat. Am digitizat manual toate datele din tabelul din imagine (Eficacitate, Risc Hipo, Greutate, CV/Renal, Costuri) și am creat o interfață unde poți selecta o clasă de medicamente pentru a vedea "fișa tehnică" sau poți compara două clase.
-
-Codul Complet Actualizat (Copy-Paste în app.py)
-code
-Python
-download
-content_copy
-expand_less
 import streamlit as st
 import pandas as pd
 
