@@ -385,18 +385,3 @@ with tab_compendium:
         
         c_left.write(f"**CV Benefit:** {d_a['cv_effect']}")
         c_right.write(f"**CV Benefit:** {d_b['cv_effect']}")
-Ce am adăugat nou:
-
-Dictionarul MED_DETAILS: Acesta este "creierul" noului tab. Conține exact textele din imagine (de exemplu, la SGLT2i menționează "Fournier's gangrene" și "Genital mycotic infections", la GLP-1 menționează "Thyroid C-cell tumors").
-
-Sistemul st.tabs: Am separat aplicația în două. Tab-ul 1 este calculatorul logic pe care l-am făcut anterior. Tab-ul 2 este "Compendiul Farmacologic".
-
-Vizualizare Interactivă: În Tab-ul 2, selectezi medicamentul (ex. SGLT2 Inhibitors) și primești o fișă colorată cu:
-
-Eficacitate / Hipo / Greutate / Cost (pe rândul de sus).
-
-Secțiune dedicată Cardio/Renal.
-
-Listă cu bullet points pentru riscuri clinice.
-
-Comparator: În josul paginii noi, am pus un "Expander" unde poți selecta Medicament A vs Medicament B pentru a compara rapid eficacitatea și efectul pe greutate (util când oscilezi între GLP-1 și SGLT2, de exemplu).
